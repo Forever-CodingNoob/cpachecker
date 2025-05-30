@@ -69,6 +69,7 @@ import org.sosy_lab.cpachecker.core.algorithm.residualprogram.TestGoalToConditio
 import org.sosy_lab.cpachecker.core.algorithm.residualprogram.slicing.SlicingAlgorithm;
 import org.sosy_lab.cpachecker.core.algorithm.termination.TerminationAlgorithm;
 import org.sosy_lab.cpachecker.core.algorithm.termination.validation.NonTerminationWitnessValidator;
+import org.sosy_lab.cpachecker.core.algorithm.GreyboxSymExAlgorithm;
 import org.sosy_lab.cpachecker.core.interfaces.ConfigurableProgramAnalysis;
 import org.sosy_lab.cpachecker.core.reachedset.AggregatedReachedSets;
 import org.sosy_lab.cpachecker.core.reachedset.AggregatedReachedSets.AggregatedReachedSetManager;
@@ -82,6 +83,11 @@ import org.sosy_lab.cpachecker.cpa.arg.ARGCPA;
 import org.sosy_lab.cpachecker.cpa.bam.BAMCPA;
 import org.sosy_lab.cpachecker.cpa.bam.BAMCounterexampleCheckAlgorithm;
 import org.sosy_lab.cpachecker.cpa.location.LocationCPA;
+import org.sosy_lab.cpachecker.cpa.callstack.CallstackCPA;
+import org.sosy_lab.cpachecker.cpa.functionpointer.FunctionPointerCPA;
+import org.sosy_lab.cpachecker.cpa.value.ValueAnalysisCPA;
+import org.sosy_lab.cpachecker.cpa.constraints.ConstraintsCPA;
+import org.sosy_lab.cpachecker.cpa.composite.CompositeCPA;
 import org.sosy_lab.cpachecker.exceptions.CPAException;
 
 /** Factory class for the three core components of CPAchecker: algorithm, cpa and reached set. */
@@ -385,6 +391,12 @@ public class CoreComponentsFactory {
       description = "Import faults stored in a JSON format.")
   private boolean useImportFaults = false;
 
+  @Option(
+      secure = true,
+      name = "algorithm.greyboxSymbolicExecution",
+      description = "use greybox symbolic execution algorithm with external pruning on unknown calls")
+  private boolean useGreyboxSymEx = false;
+
   @Option(secure = true, description = "Enable converting test goals to conditions.")
   private boolean testGoalConverter;
 
@@ -493,6 +505,10 @@ public class CoreComponentsFactory {
     } else if (useCompositionAlgorithm) {
       logger.log(Level.INFO, "Using Composition Algorithm");
       algorithm = new CompositionAlgorithm(config, logger, shutdownNotifier, specification, cfa);
+
+    } else if (useGreyboxSymEx){
+      logger.log(Level.INFO, "Using Greybox Symbolic Execution");
+      algorithm = new GreyboxSymExAlgorithm(cpa, config, logger, shutdownNotifier);
 
     } else if (useImpactAlgorithm) {
       algorithm = new ImpactAlgorithm(config, logger, shutdownNotifier, cpa, cfa);

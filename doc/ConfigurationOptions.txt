@@ -276,6 +276,10 @@ analysis.algorithm.faultLocalization.by_distance = false
 # formulas
 analysis.algorithm.faultLocalization.by_traceformula = false
 
+# use greybox symbolic execution algorithm with external pruning on unknown
+# calls
+analysis.algorithm.greyboxSymbolicExecution = false
+
 # Use McMillan's Impact algorithm for lazy interpolation
 analysis.algorithm.impact = false
 

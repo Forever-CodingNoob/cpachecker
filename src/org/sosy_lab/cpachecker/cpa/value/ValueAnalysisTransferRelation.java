@@ -130,6 +130,8 @@ import org.sosy_lab.cpachecker.util.states.MemoryLocation;
 import org.sosy_lab.cpachecker.util.states.MemoryLocationValueHandler;
 import org.xml.sax.SAXException;
 
+import java.io.*;
+
 public class ValueAnalysisTransferRelation
     extends ForwardingTransferRelation<
         ValueAnalysisState, ValueAnalysisState, VariableTrackingPrecision> {
@@ -808,7 +810,7 @@ public class ValueAnalysisTransferRelation
   @Override
   protected ValueAnalysisState handleStatementEdge(AStatementEdge cfaEdge, AStatement expression)
       throws UnrecognizedCodeException {
-
+    System.out.println("handling edge " + cfaEdge + " with expr " + expression);
     if (expression instanceof CFunctionCall functionCall) {
       CFunctionCallExpression functionCallExp = functionCall.getFunctionCallExpression();
       CExpression fn = functionCallExp.getFunctionNameExpression();
@@ -854,7 +856,7 @@ public class ValueAnalysisTransferRelation
     return state;
   }
 
-  private ValueAnalysisState handleFunctionAssignment(
+  protected ValueAnalysisState handleFunctionAssignment(
       CFunctionCallAssignmentStatement pFunctionCallAssignment) throws UnrecognizedCodeException {
 
     final CFunctionCallExpression functionCallExp =
@@ -870,12 +872,14 @@ public class ValueAnalysisTransferRelation
     final Optional<MemoryLocation> memLoc = getMemoryLocation(leftSide, newValue, evv);
 
     if (memLoc.isPresent()) {
+      System.out.println(".. before: " + newValue.isUnknown());
       if (!newValue.isUnknown()) {
         newElement.assignConstant(memLoc.orElseThrow(), newValue, leftSideType);
 
       } else {
         unknownValueHandler.handle(memLoc.orElseThrow(), leftSideType, newElement, evv);
       }
+      System.out.println(".. after: " + newValue.isUnknown());
     }
 
     return newElement;

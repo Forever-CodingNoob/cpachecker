@@ -115,7 +115,7 @@ public class ValueAnalysisCPA extends AbstractCPA
   }
 
   private VariableTrackingPrecision precision;
-  private final ValueAnalysisCPAStatistics statistics;
+  protected final ValueAnalysisCPAStatistics statistics;
   private final StateToFormulaWriter writer;
 
   private final Configuration config;
@@ -126,16 +126,16 @@ public class ValueAnalysisCPA extends AbstractCPA
   private boolean refineablePrecisionSet = false;
   private ValueAnalysisConcreteErrorPathAllocator errorPathAllocator;
 
-  private MemoryLocationValueHandler unknownValueHandler;
-  private final ConstraintsStrengthenOperator constraintsStrengthenOperator;
-  private final ValueTransferOptions transferOptions;
+  protected MemoryLocationValueHandler unknownValueHandler;
+  protected final ConstraintsStrengthenOperator constraintsStrengthenOperator;
+  protected final ValueTransferOptions transferOptions;
   private final PrecAdjustmentOptions precisionAdjustmentOptions;
   private final PrecAdjustmentStatistics precisionAdjustmentStatistics;
   private final PredicateToValuePrecisionConverter predToValPrec;
 
   private SymbolicStatistics symbolicStats;
 
-  private ValueAnalysisCPA(
+  protected ValueAnalysisCPA(
       Configuration config, LogManager logger, ShutdownNotifier pShutdownNotifier, CFA cfa)
       throws InvalidConfigurationException {
     super(DelegateAbstractDomain.<ValueAnalysisState>getInstance(), null);

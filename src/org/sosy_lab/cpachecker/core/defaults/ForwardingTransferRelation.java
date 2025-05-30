@@ -68,6 +68,8 @@ import org.sosy_lab.cpachecker.core.interfaces.Precision;
 import org.sosy_lab.cpachecker.exceptions.CPATransferException;
 import org.sosy_lab.cpachecker.util.Pair;
 
+import java.io.*;
+
 /**
  * This Transfer-Relation forwards the method 'getAbstractSuccessors()' to an edge-specific
  * sub-method ('AssumeEdge', 'DeclarationEdge', ...). It handles all casting of the edges and their
@@ -150,6 +152,7 @@ public abstract class ForwardingTransferRelation<S, T extends AbstractState, P e
       return preCheck;
     }
 
+    //System.out.println("Edge " + cfaEdge.getRawStatement() + " is of type " + cfaEdge.getEdgeType());
     final S successor =
         switch (cfaEdge.getEdgeType()) {
           case AssumeEdge -> {

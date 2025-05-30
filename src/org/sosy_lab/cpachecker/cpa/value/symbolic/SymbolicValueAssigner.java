@@ -78,7 +78,7 @@ public class SymbolicValueAssigner implements MemoryLocationValueHandler {
    * is a struct or array, behaviour is defined by {@link #handleStructs} and {@link #handleArrays}.
    *
    * @param pVarLocation the memory location of the variable to handle
-   * @param pVarType the type of th evariable
+   * @param pVarType the type of the variable
    * @param pState the {@link ValueAnalysisState} to use. Value assignments will happen directly in
    *     this state
    * @param pValueVisitor a value visitor for possibly needed evaluations or computations
