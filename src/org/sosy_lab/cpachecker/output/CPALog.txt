@@ -1,0 +1,8 @@
+2025-06-16 13:17:23:083	INFO	CPAMain.detectFrontendLanguageIfNecessary	Language C detected and set for analysis
+
+2025-06-16 13:17:23:123	INFO	CPAchecker.run	CPAchecker 4.0-701-g736a62d87d+ / symbolicExecution-greybox (OpenJDK 64-Bit Server VM 21.0.7) started
+
+2025-06-16 13:17:23:133	INFO	CPAchecker.parse	Parsing CFA from file(s) "prog0.c"
+
+2025-06-16 13:17:23:245	SEVERE	CFACreator.checkIfValidFile	Error: Invalid configuration (File /home/forvxdd/ntu/formal-methods/final-proj/cpachecker/src/org/sosy_lab/cpachecker/prog0.c does not exist!)
+

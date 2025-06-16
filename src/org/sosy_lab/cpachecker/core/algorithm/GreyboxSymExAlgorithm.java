@@ -1,35 +1,28 @@
 package org.sosy_lab.cpachecker.core.algorithm;
 
 import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.Collections;
 import java.util.logging.Level;
 import com.google.common.collect.ImmutableList;
 
 import org.sosy_lab.common.ShutdownNotifier;
 import org.sosy_lab.common.log.LogManager;
-import org.sosy_lab.common.configuration.ClassOption;
 import org.sosy_lab.common.configuration.Configuration;
 import org.sosy_lab.common.configuration.InvalidConfigurationException;
-import org.sosy_lab.common.configuration.Option;
-import org.sosy_lab.common.configuration.Options;
 
-import org.sosy_lab.cpachecker.core.algorithm.CPAAlgorithm;
 import org.sosy_lab.cpachecker.core.interfaces.*;
 import org.sosy_lab.cpachecker.core.reachedset.ReachedSet;
-import org.sosy_lab.cpachecker.core.algorithm.Algorithm.AlgorithmStatus;
 import org.sosy_lab.cpachecker.util.AbstractStates;
-import org.sosy_lab.cpachecker.util.CPAs;
 
 import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
 import org.sosy_lab.cpachecker.cpa.constraints.domain.ConstraintsState;
 import org.sosy_lab.cpachecker.cpa.value.GreyboxValueAnalysisCPA;
 import org.sosy_lab.cpachecker.cpa.value.GreyboxValueAnalysisTransferRelation;
-import org.sosy_lab.cpachecker.cpa.arg.ARGCPA;
-import org.sosy_lab.cpachecker.cpa.composite.CompositeCPA;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallState;
+import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallTransferRelation;
+import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallCPA;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallPrecondition;
+import org.sosy_lab.cpachecker.cpa.arg.ARGState;
+import org.sosy_lab.cpachecker.cpa.location.LocationState;
 
 import org.sosy_lab.cpachecker.exceptions.CPAException;
 
@@ -55,56 +48,64 @@ public class GreyboxSymExAlgorithm implements Algorithm {
   public AlgorithmStatus run(ReachedSet reached) throws CPAException, InterruptedException {
     //logger.log(Level.INFO, "CPAs:", ((CompositeCPA) ((ARGCPA) cpa).getWrappedCPAs().get(0)).getWrappedCPAs());
 
-    // 1) Delegate to the standard CPAAlgorithm until the first error
-    final CPAAlgorithm baseAlg;
+    CPAAlgorithm baseAlg;
+    AlgorithmStatus status;
+
     try{
       baseAlg = CPAAlgorithm.create(cpa, logger, config, shutdownNotifier);
     } catch (InvalidConfigurationException e) {
       // wrap in CPAException so the signature matches
       throw new CPAException("Could not create base CPAAlgorithm", e);
     }
-    // Note: CPAAlgorithm.create(cpa, logger, config, shutdown) is the standard entry point
 
-    AlgorithmStatus status = baseAlg.run(reached);
+    while(true){
+      status = baseAlg.run(reached);
+      AbstractState errorState = reached.getLastState();
 
-    // 2) If we didn’t hit an error, or got interrupted, just return
-    if (!status.isSound()) {
-      logger.log(Level.INFO, "UNSOUND! QUIT!");
-      return status;
-    }
+      /*AbstractState eee = null;
+      for (AbstractState s : reached.asCollection()) {
+        if (AbstractStates.isTargetState(s)) { eee = s; break; }
+      }*/
 
-    // 3) We hit an ERROR state; extract post‐error constraints
-    AbstractState errorState = reached.getLastState();
+      if (!AbstractStates.isTargetState(errorState)){
+        /* no error state */
+        logger.log(Level.INFO, "No error state found, yay");
+        return status;
+      }
+      
+      LocationState locState = AbstractStates.extractStateByType(errorState, LocationState.class);
+      ConstraintsState errorConstraintsState = AbstractStates.extractStateByType(errorState, ConstraintsState.class);
+      List<Constraint> postConstraints = ImmutableList.copyOf(errorConstraintsState);
 
-    ConstraintsState errorConstraintsState = AbstractStates.extractStateByType(errorState, ConstraintsState.class);
-    List<Constraint> postConstraints = ImmutableList.copyOf(errorConstraintsState);
-
-    // 4) Retrieve and pop the pre‐return snapshot
-    UnknownFuncCallState ufcState = AbstractStates.extractStateByType(errorState, UnknownFuncCallState.class);
-    //List<UnknownFuncCallPrecondition> preConstraints = ufcState.asList();
-
-    logger.log(Level.INFO,
+      UnknownFuncCallState ufcState = AbstractStates.extractStateByType(errorState, UnknownFuncCallState.class);
+      //List<UnknownFuncCallPrecondition> preConstraints = ufcState.asList();
+      logger.log(Level.INFO,
         "Pre-return constraints: ", ufcState, "\n",
         "Post-error constraints: ", postConstraints
-    );
-
-
-
-
-
-
-    // 4) TODO: call your external refiner (SMT / Daikon) on consState.getFormulas()
-    //boolean reachable = myExternalRefiner.isReachable(consState.getFormulas());
-
-    //if (!reachable) {
-      // 5) Spurious: prune and continue
-      //logger.log(Level.INFO, "Spurious error – pruning and resuming");
-      //reached.remove(errorState);
-      //return run(reached);
-    //}
-
-    // 6) Real error: propagate upstream
-    //logger.log(Level.INFO, "Confirmed real error; reporting");
+      );
+      //boolean feasible = externalRefiner.isReachable(ufc, postConditions);
+      boolean feasible = false;
+      if (!feasible) {
+        // spurious counterexample
+        logger.log(Level.INFO, "Spurious error detected at " + locState + ", pruning and continuing.");
+        if (errorState instanceof ARGState) {
+          ((ARGState) errorState).removeFromARG();
+        }
+        reached.remove(errorState);
+        // continue loop to resume analysis
+        // (possibly instantiate a new baseAlg for the next iteration)
+        try{
+          baseAlg = CPAAlgorithm.create(cpa, logger, config, shutdownNotifier);
+        } catch (InvalidConfigurationException e) {
+          // wrap in CPAException so the signature matches
+          throw new CPAException("Could not create base CPAAlgorithm", e);
+        }
+      } else {
+        // real counterexample
+        logger.log(Level.INFO, "Real error confirmed at " + errorState + ", stopping analysis.");
+        break;
+      }
+    }
     return status;
   }
 }
