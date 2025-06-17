@@ -42,6 +42,10 @@ public class UnknownFuncCallState implements AbstractState {
     return snapshots.isEmpty() ? null : snapshots.removeFirst();
   }
 
+  public UnknownFuncCallPrecondition popLast() {
+    return snapshots.isEmpty() ? null : snapshots.removeLast();
+  }
+
   /** View all snapshots on this path. */
   public List<UnknownFuncCallPrecondition> asList() {
     return Collections.unmodifiableList(List.copyOf(snapshots));

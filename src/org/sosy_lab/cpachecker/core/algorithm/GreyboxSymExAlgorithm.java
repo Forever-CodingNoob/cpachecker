@@ -1,13 +1,18 @@
 package org.sosy_lab.cpachecker.core.algorithm;
 
+import java.io.*;
+import java.nio.file.*;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Level;
-import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 
 import org.sosy_lab.common.ShutdownNotifier;
 import org.sosy_lab.common.log.LogManager;
 import org.sosy_lab.common.configuration.Configuration;
 import org.sosy_lab.common.configuration.InvalidConfigurationException;
+import org.sosy_lab.common.configuration.Option;
+import org.sosy_lab.common.configuration.Options;
 
 import org.sosy_lab.cpachecker.core.interfaces.*;
 import org.sosy_lab.cpachecker.core.reachedset.ReachedSet;
@@ -26,22 +31,40 @@ import org.sosy_lab.cpachecker.cpa.location.LocationState;
 
 import org.sosy_lab.cpachecker.exceptions.CPAException;
 
+import org.sosy_lab.cpachecker.util.greyboxsymex.*;
+
+
+@Options(prefix = "greyboxSymExAlgorithm")
 public class GreyboxSymExAlgorithm implements Algorithm {
+  @Option(secure = true,
+          name = "output.path",
+          description = "path to output dir")
+  private Path outDir = Paths.get("output").resolve("greybox");
 
   private final ConfigurableProgramAnalysis cpa;
   private final Configuration config;
   private final LogManager logger;
   private final ShutdownNotifier shutdownNotifier;
 
+  private final ExternalChecker checker;
+  private int harnessCounter = 0;
+
   public GreyboxSymExAlgorithm(
       ConfigurableProgramAnalysis pCpa,
       Configuration pConfig,
       LogManager pLogger,
-      ShutdownNotifier pShutdownNotifier) {
+      ShutdownNotifier pShutdownNotifier) throws InvalidConfigurationException{
+    pConfig.inject(this);
     this.cpa              = pCpa;
     this.config           = pConfig;
     this.logger           = pLogger;
     this.shutdownNotifier = pShutdownNotifier;
+
+    try{
+      checker = new DaikonChecker.Factory(config, logger, shutdownNotifier).create(outDir);
+    }catch(IOException e){
+      throw new InvalidConfigurationException("Failed to create DaikonChecker: " + e);
+    }
   }
 
   @Override
@@ -75,7 +98,7 @@ public class GreyboxSymExAlgorithm implements Algorithm {
       
       LocationState locState = AbstractStates.extractStateByType(errorState, LocationState.class);
       ConstraintsState errorConstraintsState = AbstractStates.extractStateByType(errorState, ConstraintsState.class);
-      List<Constraint> postConstraints = ImmutableList.copyOf(errorConstraintsState);
+      Set<Constraint> postConstraints = ImmutableSet.copyOf(errorConstraintsState);
 
       UnknownFuncCallState ufcState = AbstractStates.extractStateByType(errorState, UnknownFuncCallState.class);
       //List<UnknownFuncCallPrecondition> preConstraints = ufcState.asList();
@@ -83,8 +106,14 @@ public class GreyboxSymExAlgorithm implements Algorithm {
         "Pre-return constraints: ", ufcState, "\n",
         "Post-error constraints: ", postConstraints
       );
-      //boolean feasible = externalRefiner.isReachable(ufc, postConditions);
-      boolean feasible = false;
+
+      UnknownFuncCallPrecondition preConstraint = ufcState.popLast();
+      boolean feasible = true;
+      try{
+        feasible = checker.isPathReachable(preConstraint, postConstraints, ++harnessCounter);
+      } catch (IOException e){
+        throw new CPAException("Failed to analyze greybox functions", e);
+      }
       if (!feasible) {
         // spurious counterexample
         logger.log(Level.INFO, "Spurious error detected at " + locState + ", pruning and continuing.");

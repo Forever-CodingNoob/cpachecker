@@ -3,6 +3,8 @@ package org.sosy_lab.cpachecker.cpa.value;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
@@ -23,12 +25,14 @@ import org.sosy_lab.cpachecker.cfa.types.c.*;
 
 import org.sosy_lab.cpachecker.cpa.constraints.domain.ConstraintsState;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.ConstraintsStrengthenOperator;
+import org.sosy_lab.cpachecker.cpa.value.type.Value;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallState;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallPrecondition;
 
 import org.sosy_lab.cpachecker.util.states.MemoryLocation;
 import org.sosy_lab.cpachecker.util.states.MemoryLocationValueHandler;
 import org.sosy_lab.cpachecker.util.AbstractStates;
+import org.sosy_lab.cpachecker.util.BuiltinFunctions;
 
 import org.sosy_lab.cpachecker.exceptions.UnrecognizedCodeException;
 import org.sosy_lab.cpachecker.exceptions.CPATransferException;
@@ -44,6 +48,9 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
 
     private boolean justReturnedFromUnknownFunction = false;
     private String returnedFuncName = null;
+    private CType returnType = null;
+    private List<Value> argumentValues = new ArrayList<>();
+    private List<CType> argumentTypes = new ArrayList<>();
 
     public GreyboxValueAnalysisTransferRelation(
         LogManager pLogger,
@@ -60,16 +67,41 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
     protected ValueAnalysisState handleFunctionAssignment(
         CFunctionCallAssignmentStatement pFunctionCallAssignment) throws UnrecognizedCodeException {
     
-        ValueAnalysisState before = ValueAnalysisState.copyOf(state);
-        ValueAnalysisState after  = super.handleFunctionAssignment(pFunctionCallAssignment);
+        ValueAnalysisState nextState = super.handleFunctionAssignment(pFunctionCallAssignment);
 
-        returnedFuncName = pFunctionCallAssignment.getFunctionCallExpression().getFunctionNameExpression().toASTString();
-        System.out.println("Function name: " + returnedFuncName) ;
+        final CFunctionCallExpression funcCallExp = pFunctionCallAssignment.getFunctionCallExpression();
+        CExpression functionNameExp = funcCallExp.getFunctionNameExpression();
 
-        if (!before.equals(after)) {
-            justReturnedFromUnknownFunction = true;
+        // we only handles normal function calls
+        if (! (functionNameExp instanceof CIdExpression)) {
+            return nextState;
         }
-        return after;
+        String calledFunctionName = ((CIdExpression) functionNameExp).getName();
+        
+        // we only handles non-builtin functions
+        if (BuiltinFunctions.isBuiltinFunction(calledFunctionName)) {
+            return nextState;
+        }
+
+        System.out.println("[+] Greybox function name: " + calledFunctionName);
+        
+        List<CExpression> argumentExpressions = funcCallExp.getParameterExpressions();
+        argumentValues.clear();
+        argumentTypes.clear();
+        final ExpressionValueVisitor evv = getVisitor();
+
+        for (CExpression currParamExp : argumentExpressions) {
+            Value newValue = currParamExp.accept(evv);
+            argumentValues.add(newValue);
+            argumentTypes.add(currParamExp.getExpressionType());
+        }
+        returnType = pFunctionCallAssignment.getLeftHandSide().getExpressionType();
+
+        System.out.println("[+] Greybox function parameters: "+argumentValues);
+       
+        justReturnedFromUnknownFunction = true;
+        returnedFuncName = calledFunctionName;
+        return nextState;
     }
 
     @Override
@@ -96,7 +128,7 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
             //System.out.println("State before push:\n" + unknownFuncCallState) ;
             
             // push the snapshot
-            unknownFuncCallState.push(new UnknownFuncCallPrecondition(returnedFuncName, ImmutableSet.copyOf(constraintsState)));
+            unknownFuncCallState.push(new UnknownFuncCallPrecondition(returnedFuncName, ImmutableSet.copyOf(constraintsState), argumentValues, argumentTypes, returnType));
             System.out.println("[+] Saved preconditions!!!");
         }
 

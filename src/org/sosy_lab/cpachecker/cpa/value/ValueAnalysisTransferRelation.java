@@ -872,14 +872,12 @@ public class ValueAnalysisTransferRelation
     final Optional<MemoryLocation> memLoc = getMemoryLocation(leftSide, newValue, evv);
 
     if (memLoc.isPresent()) {
-      System.out.println(".. before: " + newValue.isUnknown());
       if (!newValue.isUnknown()) {
         newElement.assignConstant(memLoc.orElseThrow(), newValue, leftSideType);
 
       } else {
         unknownValueHandler.handle(memLoc.orElseThrow(), leftSideType, newElement, evv);
       }
-      System.out.println(".. after: " + newValue.isUnknown());
     }
 
     return newElement;
@@ -1747,7 +1745,7 @@ public class ValueAnalysisTransferRelation
     }
   }
 
-  private ExpressionValueVisitor getVisitor() {
+  protected ExpressionValueVisitor getVisitor() {
     return getVisitor(state, functionName);
   }
 }
