@@ -110,7 +110,7 @@ public abstract sealed class UnarySymbolicExpression extends SymbolicExpression
 
   @Override
   public String toString() {
-    return getOperationString() + "(" + operand + ")";
+    return "(" + getOperationString() + operand + ")";
   }
 
   public abstract String getOperationString();

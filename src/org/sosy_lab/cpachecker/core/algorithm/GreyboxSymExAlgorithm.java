@@ -101,16 +101,21 @@ public class GreyboxSymExAlgorithm implements Algorithm {
       Set<Constraint> postConstraints = ImmutableSet.copyOf(errorConstraintsState);
 
       UnknownFuncCallState ufcState = AbstractStates.extractStateByType(errorState, UnknownFuncCallState.class);
-      //List<UnknownFuncCallPrecondition> preConstraints = ufcState.asList();
-      logger.log(Level.INFO,
+      List<UnknownFuncCallPrecondition> preConstraints = ufcState.asList();
+      logger.log(Level.FINE,
         "Pre-return constraints: ", ufcState, "\n",
         "Post-error constraints: ", postConstraints
       );
 
-      UnknownFuncCallPrecondition preConstraint = ufcState.popLast();
+      //UnknownFuncCallPrecondition preConstraint = ufcState.popLast();
       boolean feasible = true;
       try{
-        feasible = checker.isPathReachable(preConstraint, postConstraints, ++harnessCounter);
+        for(UnknownFuncCallPrecondition p: preConstraints){
+          feasible = checker.isPathReachable(p, postConstraints, ++harnessCounter);
+          if (!feasible){
+            break;
+          }
+        }  
       } catch (IOException e){
         throw new CPAException("Failed to analyze greybox functions", e);
       }
@@ -131,7 +136,7 @@ public class GreyboxSymExAlgorithm implements Algorithm {
         }
       } else {
         // real counterexample
-        logger.log(Level.INFO, "Real error confirmed at " + errorState + ", stopping analysis.");
+        logger.log(Level.INFO, "Real error confirmed at " + locState + ", stopping analysis.");
         break;
       }
     }

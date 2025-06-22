@@ -4074,6 +4074,21 @@ custominstructions.requirementsStateClassName = no default value
 cwriter.withLoops.loopDetectionStrategy = ALL_LOOPS
   enum:     [ALL_LOOPS, ONLY_LAST_LOOP]
 
+# C compiler for the harness
+daikonChecker.cc = "gcc"
+
+# Path to daikon.jar
+daikonChecker.daikonJar = System.getenv().getOrDefault("DAIKON_JAR", "daikon.jar")).toAbsolutePath(
+
+# Greybox object file(s) defining the unknown functions
+daikonChecker.greyboxObjectFileStrings = List.of()
+
+# command for kvasir-dtrace (front-end to Daikon)
+daikonChecker.kvasirCmd = "kvasir-dtrace"
+
+# Number of SMT samples for Daikon sampling
+daikonChecker.numSamples = 200
+
 # toggle checking forward conditions
 dar.checkForwardConditions = true
 
@@ -4317,6 +4332,9 @@ faultLocalization.import.importFile = no default value
 
 # which scoring functions to use
 faultLocalization.import.scorings = []
+
+# path to output dir
+greyboxSymExAlgorithm.output.path = "output").resolve("greybox"
 
 # Configuration for programs containing more than @Option adressedRatio
 # addressed vars.

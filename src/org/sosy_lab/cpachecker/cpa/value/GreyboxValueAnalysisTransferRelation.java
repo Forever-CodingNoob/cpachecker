@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.base.Preconditions;
@@ -24,8 +25,12 @@ import org.sosy_lab.cpachecker.cfa.types.*;
 import org.sosy_lab.cpachecker.cfa.types.c.*;
 
 import org.sosy_lab.cpachecker.cpa.constraints.domain.ConstraintsState;
+import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.ConstraintsStrengthenOperator;
 import org.sosy_lab.cpachecker.cpa.value.type.Value;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicValueFactory;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicExpression;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicValue;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallState;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallPrecondition;
 
@@ -49,7 +54,7 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
     private boolean justReturnedFromUnknownFunction = false;
     private String returnedFuncName = null;
     private CType returnType = null;
-    private List<Value> argumentValues = new ArrayList<>();
+    private List<SymbolicExpression> argumentValues = new ArrayList<>();
     private List<CType> argumentTypes = new ArrayList<>();
 
     public GreyboxValueAnalysisTransferRelation(
@@ -92,7 +97,8 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
 
         for (CExpression currParamExp : argumentExpressions) {
             Value newValue = currParamExp.accept(evv);
-            argumentValues.add(newValue);
+            SymbolicExpression newSymValue = SymbolicValueFactory.getInstance().asConstant(newValue, currParamExp.getExpressionType());
+            argumentValues.add(newSymValue);
             argumentTypes.add(currParamExp.getExpressionType());
         }
         returnType = pFunctionCallAssignment.getLeftHandSide().getExpressionType();
@@ -129,7 +135,7 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
             
             // push the snapshot
             unknownFuncCallState.push(new UnknownFuncCallPrecondition(returnedFuncName, ImmutableSet.copyOf(constraintsState), argumentValues, argumentTypes, returnType));
-            System.out.println("[+] Saved preconditions!!!");
+            System.out.println("[+] Saved preconditions: " + List.copyOf(constraintsState).stream().map(Object::toString).collect(Collectors.joining(", ")));
         }
 
         // Delegate back to the original strengthen implementation

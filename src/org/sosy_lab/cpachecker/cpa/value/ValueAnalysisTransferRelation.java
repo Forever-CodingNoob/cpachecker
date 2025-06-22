@@ -130,8 +130,6 @@ import org.sosy_lab.cpachecker.util.states.MemoryLocation;
 import org.sosy_lab.cpachecker.util.states.MemoryLocationValueHandler;
 import org.xml.sax.SAXException;
 
-import java.io.*;
-
 public class ValueAnalysisTransferRelation
     extends ForwardingTransferRelation<
         ValueAnalysisState, ValueAnalysisState, VariableTrackingPrecision> {
@@ -810,7 +808,6 @@ public class ValueAnalysisTransferRelation
   @Override
   protected ValueAnalysisState handleStatementEdge(AStatementEdge cfaEdge, AStatement expression)
       throws UnrecognizedCodeException {
-    System.out.println("handling edge " + cfaEdge + " with expr " + expression);
     if (expression instanceof CFunctionCall functionCall) {
       CFunctionCallExpression functionCallExp = functionCall.getFunctionCallExpression();
       CExpression fn = functionCallExp.getFunctionNameExpression();

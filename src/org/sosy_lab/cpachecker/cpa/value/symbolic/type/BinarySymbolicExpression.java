@@ -149,7 +149,7 @@ public abstract sealed class BinarySymbolicExpression extends SymbolicExpression
 
   @Override
   public String toString() {
-    return operand1 + " " + getOperationString() + " " + operand2;
+    return "(" + operand1 + " " + getOperationString() + " " + operand2 + ")";
   }
 
   public abstract String getOperationString();

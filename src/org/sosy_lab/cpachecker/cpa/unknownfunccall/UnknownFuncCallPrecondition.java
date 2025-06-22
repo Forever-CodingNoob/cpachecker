@@ -7,7 +7,7 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
-import org.sosy_lab.cpachecker.cpa.value.type.Value;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicExpression;
 import org.sosy_lab.cpachecker.cfa.types.c.CType;
 
 /**  
@@ -16,14 +16,14 @@ import org.sosy_lab.cpachecker.cfa.types.c.CType;
 public final class UnknownFuncCallPrecondition {
   private final String functionName;
   private final ImmutableSet<Constraint> constraints;
-  private final ImmutableList<Value> argumentValues;
+  private final ImmutableList<SymbolicExpression> argumentValues;
   private final ImmutableList<CType> argumentTypes;
   private final CType returnType;
 
   public UnknownFuncCallPrecondition(
       String pFunctionName,
       final Set<Constraint> pConstraints,
-      final List<Value> pArgumentValues,
+      final List<SymbolicExpression> pArgumentValues,
       final List<CType> pArgumentTypes,
       final CType pReturnType) {
     checkNotNull(pFunctionName);
@@ -50,7 +50,7 @@ public final class UnknownFuncCallPrecondition {
     return constraints;
   }
 
-  public ImmutableList<Value> getArgumentValues() {
+  public ImmutableList<SymbolicExpression> getArgumentValues() {
     return argumentValues;
   }
 
