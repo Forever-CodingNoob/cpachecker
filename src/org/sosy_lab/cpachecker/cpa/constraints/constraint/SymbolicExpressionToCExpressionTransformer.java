@@ -155,7 +155,7 @@ public class SymbolicExpressionToCExpressionTransformer
     }
   }
 
-  private CExpression getIdentifierCExpression(SymbolicIdentifier pIdentifier, CType pType) {
+  protected CExpression getIdentifierCExpression(SymbolicIdentifier pIdentifier, CType pType) {
     String name = SymbolicIdentifier.Converter.getInstance().convertToStringEncoding(pIdentifier);
     CSimpleDeclaration declaration = getIdentifierDeclaration(name, pType);
 

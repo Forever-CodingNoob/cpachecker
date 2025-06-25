@@ -37,9 +37,9 @@ import org.sosy_lab.java_smt.api.Formula;
  */
 public class FormulaCreatorUsingCConverter implements FormulaCreator {
 
-  private final CtoFormulaConverter toFormulaTransformer;
+  protected final CtoFormulaConverter toFormulaTransformer;
 
-  private final String functionName;
+  protected final String functionName;
 
   public FormulaCreatorUsingCConverter(
       final CtoFormulaConverter pConverter, final String pFunctionName) {
@@ -60,11 +60,11 @@ public class FormulaCreatorUsingCConverter implements FormulaCreator {
         constraintExpression, getDummyEdge(), functionName, getSsaMapBuilder());
   }
 
-  private CFAEdge getDummyEdge() {
+  protected CFAEdge getDummyEdge() {
     return DummyEdge.getInstance(functionName);
   }
 
-  private SSAMap.SSAMapBuilder getSsaMapBuilder() {
+  protected SSAMap.SSAMapBuilder getSsaMapBuilder() {
     return SSAMap.emptySSAMap().builder();
   }
 

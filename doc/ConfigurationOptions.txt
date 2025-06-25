@@ -4078,13 +4078,13 @@ cwriter.withLoops.loopDetectionStrategy = ALL_LOOPS
 daikonChecker.cc = "gcc"
 
 # Path to daikon.jar
-daikonChecker.daikonJar = System.getenv().getOrDefault("DAIKON_JAR", "daikon.jar")).toAbsolutePath(
+daikonChecker.daikonPath = System.getenv().getOrDefault("DAIKON_JAR", "daikon.jar")).toAbsolutePath().toString(
 
 # Greybox object file(s) defining the unknown functions
 daikonChecker.greyboxObjectFileStrings = List.of()
 
 # command for kvasir-dtrace (front-end to Daikon)
-daikonChecker.kvasirCmd = "kvasir-dtrace"
+daikonChecker.kvasirPath = "kvasir-dtrace"
 
 # Number of SMT samples for Daikon sampling
 daikonChecker.numSamples = 200

@@ -1,15 +1,11 @@
 package org.sosy_lab.cpachecker.cpa.value;
 
-import java.util.ArrayDeque;
 import java.util.Collection;
-import java.util.Deque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.base.Preconditions;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.sosy_lab.common.log.LogManager;
@@ -17,20 +13,16 @@ import org.sosy_lab.common.log.LogManager;
 import org.sosy_lab.cpachecker.core.interfaces.*;
 
 import org.sosy_lab.cpachecker.cfa.CFA;
-import org.sosy_lab.cpachecker.cfa.ast.*;
 import org.sosy_lab.cpachecker.cfa.ast.c.*;
 import org.sosy_lab.cpachecker.cfa.model.*;
-import org.sosy_lab.cpachecker.cfa.model.c.*;
-import org.sosy_lab.cpachecker.cfa.types.*;
 import org.sosy_lab.cpachecker.cfa.types.c.*;
 
 import org.sosy_lab.cpachecker.cpa.constraints.domain.ConstraintsState;
-import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.ConstraintsStrengthenOperator;
 import org.sosy_lab.cpachecker.cpa.value.type.Value;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicValueFactory;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicExpression;
-import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicValue;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.ConstantSymbolicExpression;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallState;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallPrecondition;
 
@@ -42,8 +34,6 @@ import org.sosy_lab.cpachecker.util.BuiltinFunctions;
 import org.sosy_lab.cpachecker.exceptions.UnrecognizedCodeException;
 import org.sosy_lab.cpachecker.exceptions.CPATransferException;
 
-import java.io.*;
-
 /**
  * A custom ValueAnalysisTransferRelation that snapshots the
  * ConstraintsState just before a new symbolic return is introduced
@@ -52,8 +42,9 @@ import java.io.*;
 public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferRelation {
 
     private boolean justReturnedFromUnknownFunction = false;
-    private String returnedFuncName = null;
-    private CType returnType = null;
+    private @Nullable String returnedFuncName = null;
+    private @Nullable ConstantSymbolicExpression returnValue = null;
+    private @Nullable CType returnType = null;
     private List<SymbolicExpression> argumentValues = new ArrayList<>();
     private List<CType> argumentTypes = new ArrayList<>();
 
@@ -88,7 +79,7 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
             return nextState;
         }
 
-        System.out.println("[+] Greybox function name: " + calledFunctionName);
+        System.out.println("[**] Greybox function name: " + calledFunctionName);
         
         List<CExpression> argumentExpressions = funcCallExp.getParameterExpressions();
         argumentValues.clear();
@@ -103,7 +94,14 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
         }
         returnType = pFunctionCallAssignment.getLeftHandSide().getExpressionType();
 
-        System.out.println("[+] Greybox function parameters: "+argumentValues);
+        CLeftHandSide lhs = pFunctionCallAssignment.getLeftHandSide();
+        MemoryLocation lhsLoc = evv.evaluateMemoryLocation(lhs);
+        Value returnValueTmp = nextState.getValueFor(lhsLoc);
+        ConstantSymbolicExpression returnSymbolicExprTmp = (ConstantSymbolicExpression)SymbolicValueFactory.getInstance().asConstant(returnValueTmp, lhs.getExpressionType());
+        returnValue = returnSymbolicExprTmp;
+
+        System.out.println("[**] Greybox function parameters: "+argumentValues);
+        System.out.println("[**] Greybox function LHS: "+returnValue);
        
         justReturnedFromUnknownFunction = true;
         returnedFuncName = calledFunctionName;
@@ -134,8 +132,8 @@ public class GreyboxValueAnalysisTransferRelation extends ValueAnalysisTransferR
             //System.out.println("State before push:\n" + unknownFuncCallState) ;
             
             // push the snapshot
-            unknownFuncCallState.push(new UnknownFuncCallPrecondition(returnedFuncName, ImmutableSet.copyOf(constraintsState), argumentValues, argumentTypes, returnType));
-            System.out.println("[+] Saved preconditions: " + List.copyOf(constraintsState).stream().map(Object::toString).collect(Collectors.joining(", ")));
+            unknownFuncCallState.push(new UnknownFuncCallPrecondition(returnedFuncName, ImmutableSet.copyOf(constraintsState), argumentValues, argumentTypes, returnValue, returnType));
+            //System.out.println("[**] Saved preconditions: " + List.copyOf(constraintsState).stream().map(Object::toString).collect(Collectors.joining(", ")));
         }
 
         // Delegate back to the original strengthen implementation

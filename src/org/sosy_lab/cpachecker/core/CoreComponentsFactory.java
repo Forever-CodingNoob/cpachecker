@@ -508,7 +508,7 @@ public class CoreComponentsFactory {
 
     } else if (useGreyboxSymEx){
       logger.log(Level.INFO, "Using Greybox Symbolic Execution");
-      algorithm = new GreyboxSymExAlgorithm(cpa, config, logger, shutdownNotifier);
+      algorithm = new GreyboxSymExAlgorithm(cpa, config, logger, shutdownNotifier, cfa);
 
     } else if (useImpactAlgorithm) {
       algorithm = new ImpactAlgorithm(config, logger, shutdownNotifier, cpa, cfa);

@@ -18,6 +18,7 @@ import org.sosy_lab.cpachecker.core.interfaces.*;
 import org.sosy_lab.cpachecker.core.reachedset.ReachedSet;
 import org.sosy_lab.cpachecker.util.AbstractStates;
 
+import org.sosy_lab.cpachecker.cfa.CFA;
 import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
 import org.sosy_lab.cpachecker.cpa.constraints.domain.ConstraintsState;
 import org.sosy_lab.cpachecker.cpa.value.GreyboxValueAnalysisCPA;
@@ -45,6 +46,7 @@ public class GreyboxSymExAlgorithm implements Algorithm {
   private final Configuration config;
   private final LogManager logger;
   private final ShutdownNotifier shutdownNotifier;
+  private final CFA cfa;
 
   private final ExternalChecker checker;
   private int harnessCounter = 0;
@@ -53,15 +55,17 @@ public class GreyboxSymExAlgorithm implements Algorithm {
       ConfigurableProgramAnalysis pCpa,
       Configuration pConfig,
       LogManager pLogger,
-      ShutdownNotifier pShutdownNotifier) throws InvalidConfigurationException{
+      ShutdownNotifier pShutdownNotifier,
+      CFA pCfa) throws InvalidConfigurationException{
     pConfig.inject(this);
     this.cpa              = pCpa;
     this.config           = pConfig;
     this.logger           = pLogger;
     this.shutdownNotifier = pShutdownNotifier;
+    this.cfa              = pCfa;
 
     try{
-      checker = new DaikonChecker.Factory(config, logger, shutdownNotifier).create(outDir);
+      checker = new DaikonChecker.Factory(config, logger, shutdownNotifier, cfa).create(outDir);
     }catch(IOException e){
       throw new InvalidConfigurationException("Failed to create DaikonChecker: " + e);
     }

@@ -5,21 +5,27 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.regex.*;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
+import java.math.*;
 
 import org.sosy_lab.common.log.LogManager;
 import org.sosy_lab.common.ShutdownNotifier;
 import org.sosy_lab.common.configuration.Configuration;
 import org.sosy_lab.common.configuration.Option;
 import org.sosy_lab.common.configuration.Options;
+import org.sosy_lab.common.rationals.Rational;
 
+import org.sosy_lab.cpachecker.cfa.CFA;
 import org.sosy_lab.cpachecker.cpa.unknownfunccall.UnknownFuncCallPrecondition;
 import org.sosy_lab.cpachecker.cpa.constraints.constraint.Constraint;
+import org.sosy_lab.cpachecker.cpa.constraints.constraint.SymbolicExpressionToCExpressionTransformer;
 import org.sosy_lab.cpachecker.cpa.value.symbolic.type.SymbolicExpression;
 import org.sosy_lab.java_smt.SolverContextFactory;
 import org.sosy_lab.java_smt.api.*;
+import org.sosy_lab.java_smt.api.FormulaType.*;
 import org.sosy_lab.java_smt.api.NumeralFormula.*;
 import org.sosy_lab.java_smt.api.SolverContext.ProverOptions;
 
@@ -27,29 +33,40 @@ import org.sosy_lab.java_smt.api.SolverException;
 import org.sosy_lab.common.configuration.InvalidConfigurationException;
 import de.uni_freiburg.informatik.ultimate.logic.SMTLIBException;
 
-/**
- *  Very small “grey-box” checker:
- *    – writes one harness C file per unknown-function call,
- *    – runs  kvasir-dtrace + Daikon  to infer likely invariants,
- *    – conjoins invariants with postconditions using JavaSMT,
- *    – returns UNSAT -> spurious error state.
- *
- *  Requires:
- *    – daikon.jar  on $DAIKON_JAR or default “daikon.jar” in working dir
- *    – kvasir-dtrace  on PATH
- *    – a C compiler (gcc) on PATH
- */
+import org.sosy_lab.cpachecker.cpa.constraints.FormulaCreatorUsingCConverter;
+import org.sosy_lab.cpachecker.util.predicates.pathformula.ctoformula.CtoFormulaConverter;
+import org.sosy_lab.cpachecker.util.predicates.smt.FormulaManagerView;
+import org.sosy_lab.cpachecker.util.predicates.smt.Solver;
+import org.sosy_lab.cpachecker.util.predicates.pathformula.pointeraliasing.CToFormulaConverterWithPointerAliasing;
+import org.sosy_lab.cpachecker.util.predicates.pathformula.pointeraliasing.FormulaEncodingWithPointerAliasingOptions;
+import org.sosy_lab.cpachecker.util.predicates.pathformula.pointeraliasing.TypeHandlerWithPointerAliasing;
+import org.sosy_lab.cpachecker.util.predicates.pathformula.SSAMap;
+import org.sosy_lab.cpachecker.exceptions.UnrecognizedCodeException;
+import org.sosy_lab.cpachecker.core.AnalysisDirection;
+import org.sosy_lab.cpachecker.cfa.types.MachineModel;
+
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import org.sosy_lab.cpachecker.cfa.types.c.CNumericTypes;
+import org.sosy_lab.cpachecker.cfa.types.c.CType;
+import org.sosy_lab.cpachecker.cfa.ast.*;
+import org.sosy_lab.cpachecker.cfa.ast.c.*;
+import org.sosy_lab.cpachecker.cfa.types.c.*;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.util.SymbolicIdentifierLocator;
+import org.sosy_lab.cpachecker.cpa.value.symbolic.type.*;
+import org.sosy_lab.cpachecker.cpa.smg2.constraint.ConstantSymbolicExpressionLocator;
+
 @Options(prefix = "daikonChecker")
 public final class DaikonChecker implements ExternalChecker {
 
   // ---------- configurable options ----------
   @Option(secure = true,
           description = "Path to daikon.jar")
-  private Path daikonJar = Paths.get(System.getenv().getOrDefault("DAIKON_JAR", "daikon.jar")).toAbsolutePath();
+  private String daikonPath = Paths.get(System.getenv().getOrDefault("DAIKON_JAR", "daikon.jar")).toAbsolutePath().toString();
 
   @Option(secure = true,
           description = "command for kvasir-dtrace (front-end to Daikon)")
-  private String kvasirCmd = "kvasir-dtrace";
+  private String kvasirPath = "kvasir-dtrace";
 
   @Option(secure = true,
           description = "C compiler for the harness")
@@ -67,41 +84,67 @@ public final class DaikonChecker implements ExternalChecker {
   private final Path outDir;
   private final LogManager logger;
   private final ShutdownNotifier shutdown;
-  private final SolverContext ctx;
-  private final FormulaManager fmgr;
+  private final Solver solver;
+  private final FormulaManagerView fmgr;
   private final BooleanFormulaManager bmgr;
   private final IntegerFormulaManager ifmgr;
   private final RationalFormulaManager rfMgr;
+  private final FloatingPointFormulaManager fpMgr;
+  private final CtoFormulaConverter converter;
+  private FormulaCreatorUsingCConverter formulaCreator;
 
   private List<Path> greyboxObjectFiles;
+  private List<String> symExprs;
 
   public static final class Factory implements ExternalChecker.Factory {
     private final Configuration config;
     private final LogManager log;
     private final ShutdownNotifier sn;
-    public Factory(Configuration c, LogManager l, ShutdownNotifier s) {
-      config = c; log = l; sn = s;
+    private final CFA cfa;
+
+    public Factory(Configuration c, LogManager l, ShutdownNotifier s, CFA pCfa) {
+      config = c; log = l; sn = s; cfa = pCfa;
     }
+
     @Override
     public ExternalChecker create(Path dir) throws IOException, InvalidConfigurationException {
-      return new DaikonChecker(dir, config, log, sn);
+      return new DaikonChecker(dir, config, log, sn, cfa);
     }
   }
 
-  private DaikonChecker(Path dir, Configuration cfg, LogManager log, ShutdownNotifier sn) throws IOException, InvalidConfigurationException {
+
+
+  private DaikonChecker(Path dir, Configuration cfg, LogManager log, ShutdownNotifier sn, CFA cfa) throws IOException, InvalidConfigurationException {
 
     cfg.inject(this);
     outDir   = Files.createDirectories(dir);
     logger   = log;
     shutdown = sn;
 
-    ctx  = SolverContextFactory.createSolverContext(
-            cfg, logger, shutdown, SolverContextFactory.Solvers.SMTINTERPOL);
-    fmgr = ctx.getFormulaManager();
+    solver = Solver.create(cfg, logger, shutdown);
+    fmgr = solver.getFormulaManager();
     bmgr = fmgr.getBooleanFormulaManager();
     ifmgr= fmgr.getIntegerFormulaManager();
     rfMgr= fmgr.getRationalFormulaManager();
-
+    fpMgr= fmgr.getFloatingPointFormulaManager();
+    
+    FormulaEncodingWithPointerAliasingOptions options = 
+      new FormulaEncodingWithPointerAliasingOptions(cfg);
+    TypeHandlerWithPointerAliasing typeHandler =
+      new TypeHandlerWithPointerAliasing(logger, cfa.getMachineModel(), options);
+    
+    converter =
+      new CToFormulaConverterWithPointerAliasing(
+        options,
+        fmgr,
+        cfa.getMachineModel(),
+        Optional.empty(),
+        logger,
+        shutdown,
+        typeHandler,
+        AnalysisDirection.FORWARD);
+    formulaCreator = null;
+    
     greyboxObjectFiles = new ArrayList<>();
     for (String raw : greyboxObjectFileStrings) {
       String s = raw.trim();
@@ -110,6 +153,8 @@ public final class DaikonChecker implements ExternalChecker {
       }
       greyboxObjectFiles.add(Paths.get(s));
     }
+
+    symExprs = null;
   }
 
   /* =================================================================== */
@@ -123,10 +168,19 @@ public final class DaikonChecker implements ExternalChecker {
       int                        id)
       throws IOException, InterruptedException {
 
+    /* 0. preparation step */
+    Map<String, Formula> varFormulas = new LinkedHashMap<>(); // symbolic varaible to SMT formula variable mapping
+    SSAMap.SSAMapBuilder ssa = SSAMap.emptySSAMap().builder();
+    Map<Long, CType> id2Type = initVarsAndSsa(preInfo, postConstraints, ssa);
+
+    
+    // instantiate the creator that reuses the names & SSA
+    formulaCreator = new GreyboxFormulaCreator(converter, "__greybox", ssa);
+
     /* 1. ─ write harness file and compile it ───────────────────────── */
     logger.log(Level.INFO, "writing harness!");
     Path cFile = emitHarness(preInfo, id);
-    String exe = null;
+    Path exe = null;
     try{
       exe = compileHarness(cFile);
     } catch (IOException | InterruptedException e) {
@@ -135,104 +189,123 @@ public final class DaikonChecker implements ExternalChecker {
       return true;
     }
 
-
-
     /* 2. ─ prepare SMT variables and precondition formula ──────────── */
-    Map<String, Formula> varFormulas = new LinkedHashMap<>();
-    
-    // Pattern to find each SymEx[SymbolicIdentifier[n]]
-    Pattern stripSym = Pattern.compile("SymEx\\[SymbolicIdentifier\\[(\\d+)\\]\\]");
-    Pattern stripNum = Pattern.compile("SymEx\\[NumericValue\\[number=([^\\]]+)\\]\\]");
+    // Translate each precondition Constraint into a BooleanFormula
+    BooleanFormula preFormula = bmgr.makeTrue();
+    for (Constraint c : preInfo.getConstraints()) {
+      // Build a BooleanFormula
+      BooleanFormula f = buildConstraintFormula(c);
+      logger.log(Level.INFO, "[+] built precondition formula:", f);
+      preFormula = bmgr.and(preFormula, f);
+    }
+    for (Map.Entry<String, Formula> e : fmgr.extractVariables(preFormula).entrySet()) {
+        varFormulas.put(e.getKey(), e.getValue());
+    }
 
-    // 2.1 First pass: collect all IDs and determine their C/Solver type to make variables
-    for (int i = 0; i < preInfo.getArgumentValues().size(); i++) {
-      String argVal = preInfo.getArgumentValues().get(i).toString();
-      String argType = preInfo.getArgumentTypes().get(i).toString();
-      Matcher m = stripSym.matcher(argVal);
-      while (m.find()) {
-        String var = "s" + m.group(1) + "_";
-        logger.log(Level.INFO, "[+] Found symbol " + var + " in argument " + argVal);
-        if (!varFormulas.containsKey(var)) {
-          // decide solver‐side type based on argType
-          if ("double".equals(argType) || "float".equals(argType)) {
-            // floating‐point in C -> rational in JavaSMT
-            varFormulas.put(var, rfMgr.makeVariable(var));
-          } else {
-            // otherwise assume integer
-            varFormulas.put(var, ifmgr.makeVariable(var));
-          }
-        }
+    // postconditions
+    BooleanFormula postF = bmgr.makeTrue();
+    for (Constraint c : postConstraints) {
+      BooleanFormula f = buildConstraintFormula(c);
+      logger.log(Level.INFO, "[+] built postcondition formula:", f);
+      postF = bmgr.and(postF, f);
+    }
+    for (Map.Entry<String, Formula> e : fmgr.extractVariables(postF).entrySet()) {
+        varFormulas.put(e.getKey(), e.getValue());
+    }
+
+    // others
+    for (Long id_ : id2Type.keySet()) {
+      String base = "s" + id_ + "_";
+      String full = base + "@1";
+      if(!varFormulas.containsKey(full)){
+        logger.log(Level.INFO, "[+] SMT variable " + full + " does not exist, creating a new one...");
+        CType  t    = id2Type.get(id_);
+        Formula f   = (t instanceof CSimpleType st
+                       && (st.getType() == CBasicType.FLOAT
+                           || st.getType() == CBasicType.DOUBLE))
+                      ? rfMgr.makeVariable(full)
+                      : ifmgr.makeVariable(full);
+        varFormulas.put(full, f);
+      }else{
+        logger.log(Level.INFO, "[+] SMT variable " + full + " already exists!");
       }
     }
 
-    // 2.2 Translate each precondition Constraint into a BooleanFormula
-    BooleanFormula preFormula = bmgr.makeTrue();
-    for (Constraint c : preInfo.getConstraints()) {
-      // Render and strip
-      String raw = c.toString();
-      logger.log(Level.INFO, "before:", raw);
-      raw = stripNum.matcher(raw).replaceAll("$1");
-      raw = stripSym.matcher(raw).replaceAll("s$1_");
-      logger.log(Level.INFO, "after:", raw);
-      // Build a BooleanFormula
-      BooleanFormula f = buildConstraintFormula(raw, varFormulas);
-      preFormula = bmgr.and(preFormula, f);
-    }
+    logger.log(Level.INFO, "Precondition formula:", preFormula);
+    logger.log(Level.INFO, "varFormulas:", varFormulas);
 
-    System.out.println("ENTERING STAGE 3");
 
     /* 3. ─ enumerating models and running kvasir ──────────── */
-    //List<Path> decls   = new ArrayList<>();
-    //List<Path> dtraces = new ArrayList<>();
     String base = cFile.getFileName().toString().replaceFirst("\\.[^.]+$", "");
     Path decls   = outDir.resolve(base + ".decls");
     Path dtrace  = outDir.resolve(base + ".dtrace");
-    //Path dt = outDir.resolve(String.format("grey_%s_%d.dtrace", preInfo.getFunctionName(), id));
-    //Path dc = outDir.resolve(String.format("grey_%s_%d.decls", preInfo.getFunctionName(), id));
 
-    try (ProverEnvironment pe = ctx.newProverEnvironment(ProverOptions.GENERATE_MODELS)) {
+    try (ProverEnvironment pe = solver.newProverEnvironment(ProverOptions.GENERATE_MODELS)) {
       pe.addConstraint(preFormula);
 
       for (int sample = 0; sample < numSamples; sample++) {
         if (pe.isUnsat()) break;
         Model model = pe.getModel();
+        //logger.log(Level.INFO, "model:", model);
+
 
         Map<String,String> vals = new HashMap<>();
         for (Map.Entry<String,Formula> e : varFormulas.entrySet()) {
-          String var = e.getKey();
-          Object val = model.evaluate(e.getValue());
-          vals.put(var, val.toString());
+          String ssa_var = e.getKey();
+          Object raw = model.evaluate(e.getValue());
+          String lit = encodeModelValue(raw);
+
+          //vals.put(ssa_var, lit);
+          int at = ssa_var.indexOf('@');
+          if (at > 0) {
+            vals.put(ssa_var.substring(0, at), lit); //remove trailing "@1"
+          }
         }
 
-        List<String> args = buildArgs(preInfo.getArgumentValues(), vals);
+        //logger.log(Level.INFO, "valuation:", vals);
+
         List<String> kvasirCmdLine = new ArrayList<>();
-        kvasirCmdLine.add(kvasirCmd);
+        kvasirCmdLine.add(kvasirPath);
         if(sample == 0){
-          kvasirCmdLine.add("--decls-file=" + decls);
+          kvasirCmdLine.add("--decls-file=" + decls.toAbsolutePath());
         }else{
           kvasirCmdLine.add("--no-dyncomp");
           kvasirCmdLine.add("--dtrace-no-decls");
           kvasirCmdLine.add("--dtrace-append");
         }
-        kvasirCmdLine.add("--dtrace-file=" + dtrace);
-        kvasirCmdLine.add(exe); kvasirCmdLine.addAll(args);
-        System.out.println("RIGHT BEFORE CALL TO KVASIR");
+        kvasirCmdLine.add("--dtrace-file=" + dtrace.toAbsolutePath());
+        kvasirCmdLine.add(exe.toAbsolutePath().toString());
+        for(String symId: symExprs){
+          kvasirCmdLine.add(vals.get(symId));
+        }
         run(outDir, kvasirCmdLine.toArray(new String[0]));
-        //dtraces.add(dt);
-        //decls.add(dc);
 
         // block current model for next iteration
         List<BooleanFormula> eqs = new ArrayList<>();
-        for (Map.Entry<String,Formula> e : varFormulas.entrySet()) {
-          Formula varF = e.getValue();
+        for (String symId : symExprs) {
+          String full = symId + "@1";
+          Formula varF = varFormulas.get(full);
           BooleanFormula eq;
-          if (varF instanceof IntegerFormula) {
-            eq = ifmgr.equal((IntegerFormula)varF,
-                 ifmgr.makeNumber(vals.get(e.getKey())));
+          FormulaType<?> t = fmgr.getFormulaType(varF);
+          if (t.isIntegerType()) {
+            BigInteger bi  = (BigInteger) model.evaluate(varF);
+            eq = ifmgr.equal((IntegerFormula) varF, ifmgr.makeNumber(bi));
+
+          } else if (t.isRationalType()) {
+            Rational rat   = (Rational) model.evaluate(varF);
+            eq = rfMgr.equal((RationalFormula) varF, rfMgr.makeNumber(rat));
+
+          } else if (t.isFloatingPointType()) {
+            FloatingPointNumber fpVal = (FloatingPointNumber) model.evaluate(varF);
+            FloatingPointType fpType  = (FloatingPointType) t;
+            FloatingPointFormula constF =
+                  fpMgr.makeNumber(fpVal.doubleValue(), fpType);
+            eq = fpMgr.equalWithFPSemantics((FloatingPointFormula) varF, constF);
+
           } else {
-            eq = rfMgr.equal((RationalFormula)varF,
-                 rfMgr.makeNumber(vals.get(e.getKey())));
+            throw new UnsupportedOperationException("Unhandled formula sort: " + t);
           }
+
           eqs.add(eq);
         }
         pe.addConstraint(bmgr.not(bmgr.and(eqs)));
@@ -245,9 +318,9 @@ public final class DaikonChecker implements ExternalChecker {
     /* 4. ─  run Daikon ─────────────────────────────────────────────── */
     List<String> cmd = new ArrayList<>();
     cmd.add("java"); cmd.add("-Xmx3600m");
-    cmd.add("-cp"); cmd.add(daikonJar.toString()); cmd.add("daikon.Daikon");
-    cmd.add(decls.toString()); cmd.add(dtrace.toString());
-    cmd.add("--conf_limit 0");
+    cmd.add("-cp"); cmd.add(daikonPath); cmd.add("daikon.Daikon");
+    cmd.add(decls.toAbsolutePath().toString()); cmd.add(dtrace.toAbsolutePath().toString());
+    cmd.add("--conf_limit=0");
     run(outDir, cmd.toArray(new String[0]));
 
     Process p = new ProcessBuilder(cmd)
@@ -269,30 +342,107 @@ public final class DaikonChecker implements ExternalChecker {
     }
     p.waitFor();
 
-    // 5. parse invariants
+
+    /* 5. ─ Parse Daikon output  (replaces the old loop over invLines) ─ */
+    Set<String> interesting = new HashSet<>(symExprs);
+    interesting.add("s" + ((SymbolicIdentifier)preInfo.getReturnValue().getValue()).getId() + "_");
+
+    boolean inExitBlock = false;
     BooleanFormula invF = bmgr.makeTrue();
-    for (String l : invLines) {
-      String t = l.trim();
-      if (t.isEmpty() || t.startsWith("This") || t.contains(":::")) continue;
-      try { invF = bmgr.and(invF, fmgr.parse(t)); }
-      catch (Exception ignored) { 
-        logger.log(Level.INFO, "invariants cannot be parsed somehow: ", ignored);
+
+    for (String raw : invLines) {
+      String line = raw.trim();
+      if (line.startsWith("..main():::EXIT")) {
+        inExitBlock = true;
+        continue;
+      }
+      if (!inExitBlock) {
+        continue;
+      }
+      if (line.isEmpty() || line.contains("orig")) {
+        continue;
+      }
+      String cleaned = line.replaceAll("::", "").trim();
+
+      /* keep the invariant only if every variable in it is interesting */
+      boolean allRelevant = true;
+      Set<String> varsInLine = new HashSet<>();
+      Matcher m = Pattern.compile("\\b([0-9a-zA-Z_.+-]+)\\b").matcher(cleaned);
+      while (m.find()) {
+        //System.out.println("FOUND: "+ m.group(1));
+        if (interesting.contains(m.group(1)))
+          varsInLine.add(m.group(1));
+        else if (Character.isDigit(m.group(1).charAt(0))){
+          // numbers
+        } else{
+          //System.out.println(m.group(1)+" in "+cleaned+" is irrelevant, break...");
+          allRelevant = false; 
+          break;
+        }
+      }
+      if (!allRelevant) {
+        continue;
+      }
+
+      logger.log(Level.INFO, "[+] Found a liekly invariant: "+cleaned);
+
+      /* parse the invariants given by Daikon into fomulas */
+      // add ssa index
+      for (String v : varsInLine) {
+        cleaned = cleaned.replaceAll("\\b"+Pattern.quote(v)+"\\b", v+"@1");
+      }
+
+      // build smtlib2 formula
+      boolean lineHasFP = varsInLine.stream().anyMatch(v -> fmgr.getFormulaType(varFormulas.get(v+"@1")).isFloatingPointType());
+
+      String converted;
+      if (!lineHasFP) {
+        converted = "(assert " + new Infix2Smtlib().convert(cleaned) + ")";
+      } else {
+        String tmp = new Infix2Smtlib().convert(cleaned);
+        tmp = tmp.replaceAll(">=", "fp.geq")
+                  .replaceAll("<=", "fp.leq")
+                  .replaceAll(">",  "fp.gt")
+                  .replaceAll("<",  "fp.lt")
+                  .replaceAll("==", "fp.eq")
+                  .replaceAll("!=", "not fp.eq");
+        tmp = tmp.replaceAll(
+              "(?<=[ (])([0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\\b",
+              "((_ to_fp 11 53) roundNearestTiesToEven $1)");
+        tmp = tmp.replaceAll(
+              "(?<=[ (])-(\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)\\b",
+              "(fp.neg ((_ to_fp 11 53) roundNearestTiesToEven $1))");
+        converted = "(assert " + tmp + ")";
+      }
+
+      /*
+      // convert floating point to real
+      for (String v : varsInLine) {
+        FormulaType<?> t = fmgr.getFormulaType(varFormulas.get(v + "@1"));
+        if (t.isFloatingPointType()) {
+          // replace occurrences of v@1 with (fp.to_real v@1)
+          converted = converted.replaceAll("\\b" + Pattern.quote(v+"@1") + "\\b", "(fp.to_real " + v + "@1" + ")");
+         }
+      }
+      */
+
+
+
+      try {
+        invF = bmgr.and(invF, fmgr.parse(converted));
+        logger.log(Level.INFO, "[+] Added invariant: "+converted);
+      } catch (Exception ex) {
+        logger.log(Level.INFO, "[+] Cannot parse invariant '"+converted+"': ", ex);
       }
     }
 
-    // 6. postconditions
-    BooleanFormula postF = bmgr.makeTrue();
-    for (Constraint c : postConstraints) {
-      String raw = c.toString()
-                  .replaceAll("SymEx\\[NumericValue\\[number=([^\\]]+)\\]\\]", "$1")
-                  .replaceAll("SymEx\\[SymbolicIdentifier\\[(\\d+)\\]\\]", "s$1");
-      BooleanFormula f = buildConstraintFormula(raw, varFormulas);
-      postF = bmgr.and(postF, f);
-    }
 
-    // 7. SMT check
+    /* 6. ─ SMT check ────────────────────────────────────── */
+    logger.log(Level.INFO, "postcondition:", postF);
+    logger.log(Level.INFO, "invariant:", invF);
+
     BooleanFormula combined = bmgr.and(invF, postF);
-    try (ProverEnvironment pe = ctx.newProverEnvironment(ProverOptions.GENERATE_MODELS)) {
+    try (ProverEnvironment pe = solver.newProverEnvironment(ProverOptions.GENERATE_MODELS)) {
       pe.addConstraint(combined);
       boolean unsat = pe.isUnsat();
       logger.log(Level.INFO, "DaikonChecker: combined is " + (unsat? "UNSAT" : "SAT"));
@@ -303,14 +453,12 @@ public final class DaikonChecker implements ExternalChecker {
     }
   }
 
-  /* =================================================================== */
-  /*  Helper: emit C harness                                             */
-  /* =================================================================== */
-
+  /*  Helper: emit C harness */
   private Path emitHarness(UnknownFuncCallPrecondition info, int id)
       throws IOException {
 
     String func   = info.getFunctionName();
+    String retVal = "s" + ((SymbolicIdentifier)info.getReturnValue().getValue()).getId() + "_";
     String retT   = info.getReturnType().toString();
 
     List<String> argTypes = info.getArgumentTypes().stream().map(Object::toString).toList();
@@ -328,7 +476,7 @@ public final class DaikonChecker implements ExternalChecker {
       }
     }
       
-    List<String> symExprs = new ArrayList<>();
+    symExprs = new ArrayList<>();
     for (String v : argValues) {
       String replaced = v;
       replaced = stripNum.matcher(replaced).replaceAll("$1");
@@ -362,7 +510,7 @@ public final class DaikonChecker implements ExternalChecker {
       w.write("\nextern " + retT + " " + func + "(" + String.join(", ", argTypes) + ");\n\n");
 
       /* declare globals */
-      w.write(retT + " r;\n");
+      w.write(retT + " " + retVal + ";\n");
       for(int i=0; i<symExprs.size();i++){
         w.write(exprTypes.get(i)+" "+symExprs.get(i)+";\n");
       }
@@ -370,7 +518,7 @@ public final class DaikonChecker implements ExternalChecker {
 
       /* main */
       w.write("int main(int argc, char **argv){\n");
-      // 1) declare & read every symbolic var in argv order
+      // declare & read every symbolic var in argv order
       for (int i=0; i<symExprs.size(); i++){
         String symbol = symExprs.get(i);
         String type = exprTypes.get(i); 
@@ -383,7 +531,7 @@ public final class DaikonChecker implements ExternalChecker {
       w.write("\n");
 
       // function call
-      w.write("  r = " + func + "(");
+      w.write("  " + retVal + " = " + func + "(");
       w.write(String.join(", ", symExprs));
       w.write(");\n");
       
@@ -393,11 +541,8 @@ public final class DaikonChecker implements ExternalChecker {
     return cFile;
   }
 
-  /* =================================================================== */
-  /*  Helper: compile the harness file                                   */
-  /* =================================================================== */
-
-  private String compileHarness(Path cFile)
+  /*  Helper: compile the harness file */
+  private Path compileHarness(Path cFile)
       throws IOException, InterruptedException {
 
     String exe = cFile.getFileName().toString().replace(".c", ".out");
@@ -408,7 +553,7 @@ public final class DaikonChecker implements ExternalChecker {
     cmd.add("-no-pie");
     // harness source (relative to outDir)
     cmd.add(cFile.getFileName().toString());
-    // user‑provided object files (absolute paths)
+    // user-provided object files (absolute paths)
     for (Path obj : greyboxObjectFiles) {
       cmd.add(obj.toString());
     }
@@ -416,33 +561,11 @@ public final class DaikonChecker implements ExternalChecker {
     cmd.add("-o");
     cmd.add(exe);
     run(outDir, cmd.toArray(new String[0]));
-    return outDir.resolve(exe).toString();
+    return outDir.resolve(exe);
   }
 
-  /* =================================================================== */
-  /*  Helper: build a list of arguments with concrete values mapped by 'val' form variable names (e.g. s7) */
-  /* =================================================================== */
-
-  private List<String> buildArgs(
-      List<SymbolicExpression> argValues, Map<String,String> vals) {
-    Pattern pat = Pattern.compile("SymEx\\[SymbolicIdentifier\\[(\\d+)\\]\\]");
-    return argValues.stream()
-      .map(v -> {
-        Matcher m = pat.matcher(v.toString());
-        if (m.find()) {
-          return vals.get("s" + m.group(1));
-        } else {
-          return v.toString();
-        }
-      })
-      .toList();
-  }
-
-  /* =================================================================== */
-  /*  Helper: run a command with inherited IO                            */
-  /* =================================================================== */
-
-  private static void run(Path dir, String... cmd)
+  /*  Helper: run a command with inherited IO */
+  private void run(Path dir, String... cmd)
       throws IOException, InterruptedException {
 
     ProcessBuilder pb = new ProcessBuilder(cmd).directory(dir.toFile());
@@ -452,7 +575,7 @@ public final class DaikonChecker implements ExternalChecker {
         new InputStreamReader(p.getInputStream(), UTF_8))) {
       String line;
       while ((line = r.readLine()) != null) {
-        System.out.println(String.join(" ", cmd) + " | " + line);
+        logger.log(Level.FINE, String.join(" ", cmd) + " | " + line);
       }
     }
     if (p.waitFor() != 0) {
@@ -460,103 +583,260 @@ public final class DaikonChecker implements ExternalChecker {
     }
   }
 
-  /* =================================================================== */
-  /*  Helper: build SMT fomula?                                          */
-  /* =================================================================== */
-  private BooleanFormula buildConstraintFormula(
-      String expr, Map<String,Formula> varFormulas) {
-    logger.log(Level.INFO, "[+] expr:", expr);
-    logger.log(Level.INFO, "[+] varFormulas:", varFormulas);
-    // 1) find operator
-    String op = "!=";
-    for (String cand : List.of("<=", ">=", "==", "!=", "<", ">")) {
-      if (expr.contains(cand)) {
-        op = cand;
-        break;
-      }
-    }
-    //if (op == null) {
-    //  return bmgr.makeTrue();
-    //}
-
-    // 2) split into left/right
-    String left, right;
-    String[] parts = expr.split(Pattern.quote(op), 2);
-    if (parts.length != 2) {
-      left  = expr.trim();
-      right = "0";
-    }else{
-      left  = parts[0].trim();
-      right = parts[1].trim();
-    }
-
-    // 3) map to Formulas, numeric vs symbolic
-    Formula fL = varFormulas.containsKey(left)
-        ? varFormulas.get(left)
-        : tryParseNumber(left, left, varFormulas);
-    Formula fR = varFormulas.containsKey(right)
-        ? varFormulas.get(right)
-        : tryParseNumber(right, right, varFormulas);
-
-    // 4) dispatch based on type
-    logger.log(Level.INFO, "[+]", fL, fL instanceof IntegerFormula, fR, fR instanceof IntegerFormula);
-    if (fL instanceof IntegerFormula && fR instanceof IntegerFormula) {
-      IntegerFormula l = (IntegerFormula) fL;
-      IntegerFormula r = (IntegerFormula) fR;
-      return switch (op) {
-        case "<=" -> ifmgr.lessOrEquals(l, r);
-        case "<"  -> ifmgr.lessThan(l, r);
-        case ">=" -> ifmgr.greaterOrEquals(l, r);
-        case ">"  -> ifmgr.greaterThan(l, r);
-        case "==" -> ifmgr.equal(l, r);
-        case "!=" -> bmgr.not(ifmgr.equal(l, r));
-        default   -> bmgr.makeTrue();
-      };
-    } else if (fL instanceof RationalFormula && fR instanceof RationalFormula){
-      RationalFormula l = (RationalFormula) fL;
-      RationalFormula r = (RationalFormula) fR;
-      return switch (op) {
-        case "<=" -> rfMgr.lessOrEquals(l, r);
-        case "<"  -> rfMgr.lessThan(l, r);
-        case ">=" -> rfMgr.greaterOrEquals(l, r);
-        case ">"  -> rfMgr.greaterThan(l, r);
-        case "==" -> rfMgr.equal(l, r);
-        case "!=" -> bmgr.not(rfMgr.equal(l, r));
-        default   -> bmgr.makeTrue();
-      };
-    } else{
-      // can't compare int <-> real directly in this simple setup
-      logger.log(Level.WARNING, "Cannot compare int term and rational term in SMT");
-      return bmgr.makeTrue();
-    }
-  }
-
-  /* 
-   * Try to parse the string as a number; if that fails, assume it's a symbolic var 
-   * and look it up in varFormulas (falling back to true if absent).
-   */
-  private Formula tryParseNumber(
-      String token,
-      String original,
-      Map<String,Formula> varFormulas) {
+  /*  Helper: build SMT fomula? */
+  private BooleanFormula buildConstraintFormula(Constraint constraint) {
     try {
-      return parseNumericLiteral(token);
-    } catch (IllegalArgumentException | SMTLIBException e) {
-      // not a numeral, then treat as symbolic var
-      if (varFormulas.containsKey(original)) {
-        return varFormulas.get(original);
-      }
-      // should never happen if you collected all sN up front
+      return formulaCreator.createFormula(constraint);
+
+    } catch (UnrecognizedCodeException | InterruptedException e) {
+      logger.log(Level.WARNING, "Constraint to Formula failed, fall back to TRUE", e);
       return bmgr.makeTrue();
     }
   }
 
-  private Formula parseNumericLiteral(String lit) {
-    if (lit.contains(".") || lit.contains("e") || lit.contains("E")) {
-      return rfMgr.makeNumber(lit);
-    } else {
-      return ifmgr.makeNumber(lit);
+
+
+
+
+
+
+  private static final class GreyboxIdTransformer
+    extends SymbolicExpressionToCExpressionTransformer {
+
+    @Override
+    protected CExpression getIdentifierCExpression(SymbolicIdentifier pIdentifier, CType pType) {
+      String name = "s" + pIdentifier.getId() + "_";
+      CSimpleDeclaration declaration = new CVariableDeclaration(
+            FileLocation.DUMMY,
+            false,
+            CStorageClass.AUTO,
+            pType,
+            name,
+            name,
+            name,
+            null
+          );
+      return new CIdExpression(FileLocation.DUMMY, pType, name, declaration);
     }
   }
 
+  private static final class GreyboxFormulaCreator
+      extends FormulaCreatorUsingCConverter {
+
+    private final SSAMap.SSAMapBuilder ssa;
+    private final GreyboxIdTransformer toExpressionTranformer;
+
+    GreyboxFormulaCreator(
+        CtoFormulaConverter conv,
+        String fn,
+        SSAMap.SSAMapBuilder pSsa) {
+
+      super(conv, fn);
+      ssa = pSsa;
+      toExpressionTranformer = new GreyboxIdTransformer();
+    }
+
+    @Override
+    protected SSAMap.SSAMapBuilder getSsaMapBuilder() {
+      return ssa;
+    }
+
+    @Override
+    public BooleanFormula createFormula(final Constraint pConstraint)
+        throws UnrecognizedCodeException, InterruptedException {
+
+      CExpression constraintExpression = pConstraint.accept(toExpressionTranformer);
+      return toFormulaTransformer.makePredicate(
+          constraintExpression, getDummyEdge(), functionName, getSsaMapBuilder());
+    }
+  }
+ 
+
+
+
+
+
+  private Map<Long,CType> initVarsAndSsa(
+      UnknownFuncCallPrecondition preInfo,
+      Collection<Constraint>      postCons,
+      SSAMap.SSAMapBuilder        ssa) {
+
+    Map<Long,CType> id2Type = new HashMap<>();
+    ConstantSymbolicExpressionLocator loc =
+        ConstantSymbolicExpressionLocator.getInstance();
+
+    /* ------------ helper that handles one SymbolicExpression -------------- */
+    Consumer<SymbolicExpression> harvest = expr -> {
+      for (ConstantSymbolicExpression cst : expr.accept(loc)) {
+        logger.log(Level.INFO, "[+] found symbol " + cst + " in expr " + expr);
+        SymbolicIdentifier sid = (SymbolicIdentifier) cst.getValue();
+        long   idNum = sid.getId();
+        String name  = "s" + idNum + "_";
+        CType  cType = (CType) cst.getType();
+
+        id2Type.putIfAbsent(idNum, cType);
+        ssa.setIndex(name, cType, 1);
+      }
+    };
+
+    /* arguments */
+    preInfo.getArgumentValues().forEach(harvest);
+
+    /* pre-condition constraints */
+    preInfo.getConstraints().forEach(c -> harvest.accept((SymbolicExpression)c));
+
+    /* post-condition constraints */
+    postCons.forEach(c -> harvest.accept((SymbolicExpression)c));
+
+    return id2Type;
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  private static String encodeModelValue(Object v) {
+    /*  Integers */
+    if (v instanceof BigInteger bi) {
+      return bi.toString();
+    }
+
+    /*  Rationals */
+    if (v instanceof Rational r) {
+      // r = num / den, both BigInteger
+      BigDecimal num = new BigDecimal(r.getNum());
+      BigDecimal den = new BigDecimal(r.getDen());
+      // scale = max(num.precision(), den.precision())
+      return num.divide(den, MathContext.DECIMAL128).stripTrailingZeros()
+                .toPlainString(); // e.g. 123.125
+    }
+
+    /*  IEEE-754 floating-point numbers */
+    if (v instanceof FloatingPointNumber fp) {
+      double d = fp.doubleValue();
+      if (Double.isNaN(d) || Double.isInfinite(d)) {
+        return "0"; // harness can't parse NaN/Inf
+      }
+      return Double.toString(d); // e.g. 3.141592653589793
+    }
+
+    return v.toString(); // fallback (rare)
+  }
+
+  
+
+
+
+
+  private static final class Infix2Smtlib {
+    String convert(String line) {
+      this.s = line.trim();
+      this.pos = 0;
+      String sexpr = parseComparison();
+      skipWS();
+      return (pos == s.length()) ? sexpr : "";   // "" → could not parse
+    }
+
+    /* grammar --------------------------------------------------------
+     *   comparison := sum [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) sum ]
+     *   sum        := term { ("+"|"-") term }
+     *   term       := factor { ("*"|"/") factor }
+     *   factor     := number | ident | "-" factor | "(" comparison ")"
+     * ----------------------------------------------------------------*/
+
+    private String parseComparison() {
+      String left = parseSum();
+      skipWS();
+      if (match("<=")) return "(<= "  + left + " " + parseSum() + ")";
+      if (match("<"))  return "(< "   + left + " " + parseSum() + ")";
+      if (match(">=")) return "(>= "  + left + " " + parseSum() + ")";
+      if (match(">"))  return "(> "   + left + " " + parseSum() + ")";
+      if (match("==")) return "(= "   + left + " " + parseSum() + ")";
+      if (match("!=")) return "(distinct " + left + " " + parseSum() + ")";
+      return left;
+    }
+
+    private String parseSum() {
+      String acc = parseTerm();
+      while (true) {
+        skipWS();
+        if (match("+")) acc = "(+ " + acc + " " + parseTerm() + ")";
+        else if (match("-")) acc = "(- " + acc + " " + parseTerm() + ")";
+        else break;
+      }
+      return acc;
+    }
+
+    private String parseTerm() {
+      String acc = parseFactor();
+      while (true) {
+        skipWS();
+        if (match("*")) acc = "(* " + acc + " " + parseFactor() + ")";
+        else if (match("/")) acc = "(/ " + acc + " " + parseFactor() + ")";
+        else break;
+      }
+      return acc;
+    }
+
+    private String parseFactor() {
+      skipWS();
+      if (match("-")) {
+        if (peekDigit()) {
+          return "-" + parseNumber();
+        }
+        return "(- " + parseFactor() + ")";
+      }
+      if (match("(")) {
+        String inside = parseComparison();
+        expect(")");
+        return inside;
+      }
+      if (peekDigit()) return parseNumber();
+      return parseIdent();
+    }
+
+    private String parseNumber() {
+      int start = pos;
+      while (pos < s.length()
+          && ("0123456789.eE+-".indexOf(s.charAt(pos)) >= 0)) pos++;
+      return s.substring(start, pos);
+    }
+
+    private String parseIdent() {
+      int start = pos;
+      while (pos < s.length()
+          && (Character.isLetterOrDigit(s.charAt(pos))
+              || s.charAt(pos)=='_' || s.charAt(pos)=='@')) pos++;
+      return s.substring(start, pos);
+    }
+
+    private void skipWS() { 
+      while (pos < s.length() && Character.isWhitespace(s.charAt(pos))) 
+        pos++; 
+    }
+    private boolean match(String tok) {
+      skipWS();
+      if (s.startsWith(tok, pos)) { pos += tok.length(); return true; }
+      return false;
+    }
+    private void expect(String tok) {
+      if (!match(tok)) pos = s.length()+1;
+    }
+    private boolean peekDigit() { 
+      skipWS(); 
+      return pos < s.length() && Character.isDigit(s.charAt(pos)); 
+    }
+
+    private String s;
+    private int pos;
+  }
 }
