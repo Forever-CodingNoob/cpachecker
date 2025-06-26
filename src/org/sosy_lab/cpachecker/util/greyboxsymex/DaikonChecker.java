@@ -178,7 +178,6 @@ public final class DaikonChecker implements ExternalChecker {
     formulaCreator = new GreyboxFormulaCreator(converter, "__greybox", ssa);
 
     /* 1. ─ write harness file and compile it ───────────────────────── */
-    logger.log(Level.INFO, "writing harness!");
     Path cFile = emitHarness(preInfo, id);
     Path exe = null;
     try{
@@ -195,7 +194,7 @@ public final class DaikonChecker implements ExternalChecker {
     for (Constraint c : preInfo.getConstraints()) {
       // Build a BooleanFormula
       BooleanFormula f = buildConstraintFormula(c);
-      logger.log(Level.INFO, "[+] built precondition formula:", f);
+      logger.log(Level.FINE, "[+] built precondition formula:", f);
       preFormula = bmgr.and(preFormula, f);
     }
     for (Map.Entry<String, Formula> e : fmgr.extractVariables(preFormula).entrySet()) {
@@ -206,7 +205,7 @@ public final class DaikonChecker implements ExternalChecker {
     BooleanFormula postF = bmgr.makeTrue();
     for (Constraint c : postConstraints) {
       BooleanFormula f = buildConstraintFormula(c);
-      logger.log(Level.INFO, "[+] built postcondition formula:", f);
+      logger.log(Level.FINE, "[+] built postcondition formula:", f);
       postF = bmgr.and(postF, f);
     }
     for (Map.Entry<String, Formula> e : fmgr.extractVariables(postF).entrySet()) {
@@ -218,7 +217,7 @@ public final class DaikonChecker implements ExternalChecker {
       String base = "s" + id_ + "_";
       String full = base + "@1";
       if(!varFormulas.containsKey(full)){
-        logger.log(Level.INFO, "[+] SMT variable " + full + " does not exist, creating a new one...");
+        logger.log(Level.FINE, "[+] SMT variable " + full + " does not exist, creating a new one...");
         CType  t    = id2Type.get(id_);
         Formula f   = (t instanceof CSimpleType st
                        && (st.getType() == CBasicType.FLOAT
@@ -227,12 +226,12 @@ public final class DaikonChecker implements ExternalChecker {
                       : ifmgr.makeVariable(full);
         varFormulas.put(full, f);
       }else{
-        logger.log(Level.INFO, "[+] SMT variable " + full + " already exists!");
+        logger.log(Level.FINE, "[+] SMT variable " + full + " already exists!");
       }
     }
 
-    logger.log(Level.INFO, "Precondition formula:", preFormula);
-    logger.log(Level.INFO, "varFormulas:", varFormulas);
+    logger.log(Level.FINE, "Precondition formula:", preFormula);
+    logger.log(Level.FINE, "varFormulas:", varFormulas);
 
 
     /* 3. ─ enumerating models and running kvasir ──────────── */
@@ -246,7 +245,7 @@ public final class DaikonChecker implements ExternalChecker {
       for (int sample = 0; sample < numSamples; sample++) {
         if (pe.isUnsat()) break;
         Model model = pe.getModel();
-        //logger.log(Level.INFO, "model:", model);
+        //logger.log(Level.FINE, "model:", model);
 
 
         Map<String,String> vals = new HashMap<>();
@@ -262,7 +261,7 @@ public final class DaikonChecker implements ExternalChecker {
           }
         }
 
-        //logger.log(Level.INFO, "valuation:", vals);
+        //logger.log(Level.FINE, "valuation:", vals);
 
         List<String> kvasirCmdLine = new ArrayList<>();
         kvasirCmdLine.add(kvasirPath);
@@ -350,6 +349,7 @@ public final class DaikonChecker implements ExternalChecker {
     boolean inExitBlock = false;
     BooleanFormula invF = bmgr.makeTrue();
 
+    Set<String> invs = new HashSet<>();
     for (String raw : invLines) {
       String line = raw.trim();
       if (line.startsWith("..main():::EXIT")) {
@@ -384,7 +384,8 @@ public final class DaikonChecker implements ExternalChecker {
         continue;
       }
 
-      logger.log(Level.INFO, "[+] Found a liekly invariant: "+cleaned);
+      invs.add(cleaned);
+      logger.log(Level.FINE, "[+] Found a liekly invariant: "+cleaned);
 
       /* parse the invariants given by Daikon into fomulas */
       // add ssa index
@@ -415,37 +416,31 @@ public final class DaikonChecker implements ExternalChecker {
         converted = "(assert " + tmp + ")";
       }
 
-      /*
-      // convert floating point to real
-      for (String v : varsInLine) {
-        FormulaType<?> t = fmgr.getFormulaType(varFormulas.get(v + "@1"));
-        if (t.isFloatingPointType()) {
-          // replace occurrences of v@1 with (fp.to_real v@1)
-          converted = converted.replaceAll("\\b" + Pattern.quote(v+"@1") + "\\b", "(fp.to_real " + v + "@1" + ")");
-         }
-      }
-      */
-
-
-
       try {
         invF = bmgr.and(invF, fmgr.parse(converted));
-        logger.log(Level.INFO, "[+] Added invariant: "+converted);
+        logger.log(Level.FINE, "[+] Added invariant: "+converted);
       } catch (Exception ex) {
-        logger.log(Level.INFO, "[+] Cannot parse invariant '"+converted+"': ", ex);
+        logger.log(Level.FINE, "[+] Cannot parse invariant '"+converted+"': ", ex);
       }
     }
 
 
     /* 6. ─ SMT check ────────────────────────────────────── */
-    logger.log(Level.INFO, "postcondition:", postF);
-    logger.log(Level.INFO, "invariant:", invF);
+    logger.log(Level.FINE, "postcondition:", postF);
+    logger.log(Level.FINE, "invariant:", invF);
 
     BooleanFormula combined = bmgr.and(invF, postF);
     try (ProverEnvironment pe = solver.newProverEnvironment(ProverOptions.GENERATE_MODELS)) {
       pe.addConstraint(combined);
       boolean unsat = pe.isUnsat();
-      logger.log(Level.INFO, "DaikonChecker: combined is " + (unsat? "UNSAT" : "SAT"));
+      logger.log(Level.FINE, "DaikonChecker: combined is " + (unsat? "UNSAT" : "SAT"));
+      if(unsat){
+        String func   = preInfo.getFunctionName();
+        String retVal = "s" + ((SymbolicIdentifier)preInfo.getReturnValue().getValue()).getId() + "_";
+        logger.log(Level.INFO, "The reported error state is unreachable if the following invariants hold:");
+        logger.log(Level.INFO, String.join(" && ", invs)); 
+        logger.log(Level.INFO, "where", retVal, "=", func + "("+String.join(", ", symExprs) + ")");
+      }
       return !unsat;  // SAT => real error reachable
     } catch (SolverException e) {
       logger.log(Level.WARNING, e, "SMT solver failure, assume reachable");
@@ -482,7 +477,7 @@ public final class DaikonChecker implements ExternalChecker {
       replaced = stripNum.matcher(replaced).replaceAll("$1");
       replaced = stripSym.matcher(replaced).replaceAll("s$1_");
       symExprs.add(replaced);
-      logger.log(Level.INFO, "added expression: " + replaced);
+      logger.log(Level.FINE, "added expression: " + replaced);
     }
 
     List<String> exprTypes = new ArrayList<>();
@@ -537,7 +532,7 @@ public final class DaikonChecker implements ExternalChecker {
       
       w.write("}\n");
     }
-    logger.log(Level.INFO, "Harness written: {" + cFile +"}");
+    logger.log(Level.FINE, "Harness written: {" + cFile +"}");
     return cFile;
   }
 
@@ -668,7 +663,7 @@ public final class DaikonChecker implements ExternalChecker {
     /* ------------ helper that handles one SymbolicExpression -------------- */
     Consumer<SymbolicExpression> harvest = expr -> {
       for (ConstantSymbolicExpression cst : expr.accept(loc)) {
-        logger.log(Level.INFO, "[+] found symbol " + cst + " in expr " + expr);
+        logger.log(Level.FINE, "[+] found symbol " + cst + " in expr " + expr);
         SymbolicIdentifier sid = (SymbolicIdentifier) cst.getValue();
         long   idNum = sid.getId();
         String name  = "s" + idNum + "_";

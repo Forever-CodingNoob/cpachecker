@@ -89,11 +89,6 @@ public class GreyboxSymExAlgorithm implements Algorithm {
       status = baseAlg.run(reached);
       AbstractState errorState = reached.getLastState();
 
-      /*AbstractState eee = null;
-      for (AbstractState s : reached.asCollection()) {
-        if (AbstractStates.isTargetState(s)) { eee = s; break; }
-      }*/
-
       if (!AbstractStates.isTargetState(errorState)){
         /* no error state */
         logger.log(Level.INFO, "No error state found, yay");
@@ -114,7 +109,8 @@ public class GreyboxSymExAlgorithm implements Algorithm {
       //UnknownFuncCallPrecondition preConstraint = ufcState.popLast();
       boolean feasible = true;
       try{
-        for(UnknownFuncCallPrecondition p: preConstraints){
+        for(int i = preConstraints.size() - 1; i >= 0; i--){
+          UnknownFuncCallPrecondition p = preConstraints.get(i);
           feasible = checker.isPathReachable(p, postConstraints, ++harnessCounter);
           if (!feasible){
             break;
